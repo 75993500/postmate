@@ -87,14 +87,16 @@ export const resolveValue = (model, property) => {
  * @param {Object} info Information on the consumer
  */
 export class ParentAPI {
-  constructor (info) {
+  constructor () {
+  }
+
+  init(info) {
     this.parent = info.parent
     this.frame = info.frame
     this.child = info.child
     this.childOrigin = info.childOrigin
 
     this.events = {}
-
     if (process.env.NODE_ENV !== 'production') {
       log('Parent: Registering API')
       log('Parent: Awaiting messages...')
@@ -106,7 +108,7 @@ export class ParentAPI {
         if (process.env.NODE_ENV !== 'production') {
           log(`Parent: Received event emission: ${name}`)
         }
-        if (name in this.events) {
+        if (this.events && name in this.events) {
           this.events[name].call(this, data)
         }
       }
@@ -114,7 +116,7 @@ export class ParentAPI {
 
     this.parent.addEventListener('message', this.listener, false)
     if (process.env.NODE_ENV !== 'production') {
-      log('Parent: Awaiting event emissions from Child')
+        log('Parent: Awaiting event emissions from Child')
     }
   }
 
@@ -144,25 +146,32 @@ export class ParentAPI {
 
   call (property, data) {
     // Send information to the child
-    this.child.postMessage({
-      postmate: 'call',
-      type: messsageType,
-      property,
-      data,
-    }, this.childOrigin)
+    if(this.child) {
+      this.child.postMessage({
+        postmate: 'call',
+        type: messsageType,
+        property,
+        data,
+      }, this.childOrigin);
+    }
   }
 
   on (eventName, callback) {
-    this.events[eventName] = callback
+    if(this.events) this.events[eventName] = callback
   }
 
   destroy () {
     if (process.env.NODE_ENV !== 'production') {
       log('Parent: Destroying Postmate instance')
     }
-    window.removeEventListener('message', this.listener, false)
-    this.frame.parentNode.removeChild(this.frame)
+    window.removeEventListener('message', this.listener, false);
+    if(this.parent) this.parent.removeEventListener('message', this.listener, false);
+    if (this.frame) {
+      this.frame.parentNode.removeChild(this.frame);
+    }
+    this.events = null;
   }
+
 }
 
 /**
@@ -267,8 +276,9 @@ class Postmate {
   sendHandshake (url) {
     const childOrigin = resolveOrigin(url)
     let attempt = 0
-    let responseInterval
-    return new Postmate.Promise((resolve, reject) => {
+    let responseInterval;
+    let parentAPI = new ParentAPI();
+    return {parentAPI: parentAPI, promise: new Postmate.Promise((resolve, reject) => {
       const reply = (e) => {
         if (!sanitize(e, childOrigin)) return false
         if (e.data.postmate === 'handshake-reply') {
@@ -281,7 +291,8 @@ class Postmate {
           if (process.env.NODE_ENV !== 'production') {
             log('Parent: Saving Child origin', this.childOrigin)
           }
-          return resolve(new ParentAPI(this))
+          parentAPI.init.call(parentAPI, this);
+          return resolve(parentAPI);
         }
 
         // Might need to remove since parent might be receiving different messages
@@ -325,7 +336,7 @@ class Postmate {
         log('Parent: Loading frame', { url })
       }
       this.frame.src = url
-    })
+    })}
   }
 }
 
