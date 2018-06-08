@@ -101,7 +101,11 @@ var resolveValue = function resolveValue(model, property) {
 var ParentAPI =
 /*#__PURE__*/
 function () {
-  function ParentAPI(info) {
+  function ParentAPI() {}
+
+  var _proto = ParentAPI.prototype;
+
+  _proto.init = function init(info) {
     var _this = this;
 
     this.parent = info.parent;
@@ -125,7 +129,7 @@ function () {
           log("Parent: Received event emission: " + name);
         }
 
-        if (name in _this.events) {
+        if (_this.events && name in _this.events) {
           _this.events[name].call(_this, data);
         }
       }
@@ -136,9 +140,7 @@ function () {
     if (process.env.NODE_ENV !== 'production') {
       log('Parent: Awaiting event emissions from Child');
     }
-  }
-
-  var _proto = ParentAPI.prototype;
+  };
 
   _proto.get = function get(property) {
     var _this2 = this;
@@ -170,16 +172,18 @@ function () {
 
   _proto.call = function call(property, data) {
     // Send information to the child
-    this.child.postMessage({
-      postmate: 'call',
-      type: messsageType,
-      property: property,
-      data: data
-    }, this.childOrigin);
+    if (this.child) {
+      this.child.postMessage({
+        postmate: 'call',
+        type: messsageType,
+        property: property,
+        data: data
+      }, this.childOrigin);
+    }
   };
 
   _proto.on = function on(eventName, callback) {
-    this.events[eventName] = callback;
+    if (this.events) this.events[eventName] = callback;
   };
 
   _proto.destroy = function destroy() {
@@ -188,7 +192,13 @@ function () {
     }
 
     window.removeEventListener('message', this.listener, false);
-    this.frame.parentNode.removeChild(this.frame);
+    if (this.parent) this.parent.removeEventListener('message', this.listener, false);
+
+    if (this.frame) {
+      this.frame.parentNode.removeChild(this.frame);
+    }
+
+    this.events = null;
   };
 
   return ParentAPI;
@@ -312,78 +322,83 @@ function () {
     var childOrigin = resolveOrigin(url);
     var attempt = 0;
     var responseInterval;
-    return new Postmate.Promise(function (resolve, reject) {
-      var reply = function reply(e) {
-        if (!sanitize(e, childOrigin)) return false;
+    var parentAPI = new ParentAPI();
+    return {
+      parentAPI: parentAPI,
+      promise: new Postmate.Promise(function (resolve, reject) {
+        var reply = function reply(e) {
+          if (!sanitize(e, childOrigin)) return false;
 
-        if (e.data.postmate === 'handshake-reply') {
-          clearInterval(responseInterval);
+          if (e.data.postmate === 'handshake-reply') {
+            clearInterval(responseInterval);
+
+            if (process.env.NODE_ENV !== 'production') {
+              log('Parent: Received handshake reply from Child');
+            }
+
+            _this4.parent.removeEventListener('message', reply, false);
+
+            _this4.childOrigin = e.origin;
+
+            if (process.env.NODE_ENV !== 'production') {
+              log('Parent: Saving Child origin', _this4.childOrigin);
+            }
+
+            parentAPI.init.call(parentAPI, _this4);
+            return resolve(parentAPI);
+          } // Might need to remove since parent might be receiving different messages
+          // from different hosts
+
 
           if (process.env.NODE_ENV !== 'production') {
-            log('Parent: Received handshake reply from Child');
+            log('Parent: Invalid handshake reply');
           }
 
-          _this4.parent.removeEventListener('message', reply, false);
+          return reject('Failed handshake');
+        };
 
-          _this4.childOrigin = e.origin;
+        _this4.parent.addEventListener('message', reply, false);
+
+        var doSend = function doSend() {
+          attempt++;
 
           if (process.env.NODE_ENV !== 'production') {
-            log('Parent: Saving Child origin', _this4.childOrigin);
+            log("Parent: Sending handshake attempt " + attempt, {
+              childOrigin: childOrigin
+            });
           }
 
-          return resolve(new ParentAPI(_this4));
-        } // Might need to remove since parent might be receiving different messages
-        // from different hosts
+          _this4.child.postMessage({
+            postmate: 'handshake',
+            type: messsageType,
+            model: _this4.model
+          }, childOrigin);
 
+          if (attempt === maxHandshakeRequests) {
+            clearInterval(responseInterval);
+          }
+        };
 
-        if (process.env.NODE_ENV !== 'production') {
-          log('Parent: Invalid handshake reply');
+        var loaded = function loaded() {
+          doSend();
+          responseInterval = setInterval(doSend, 500);
+        };
+
+        if (_this4.frame.attachEvent) {
+          _this4.frame.attachEvent('onload', loaded);
+        } else {
+          _this4.frame.onload = loaded;
         }
 
-        return reject('Failed handshake');
-      };
-
-      _this4.parent.addEventListener('message', reply, false);
-
-      var doSend = function doSend() {
-        attempt++;
-
         if (process.env.NODE_ENV !== 'production') {
-          log("Parent: Sending handshake attempt " + attempt, {
-            childOrigin: childOrigin
+          log('Parent: Loading frame', {
+            url: url
           });
         }
 
-        _this4.child.postMessage({
-          postmate: 'handshake',
-          type: messsageType,
-          model: _this4.model
-        }, childOrigin);
-
-        if (attempt === maxHandshakeRequests) {
-          clearInterval(responseInterval);
-        }
-      };
-
-      var loaded = function loaded() {
-        doSend();
-        responseInterval = setInterval(doSend, 500);
-      };
-
-      if (_this4.frame.attachEvent) {
-        _this4.frame.attachEvent('onload', loaded);
-      } else {
-        _this4.frame.onload = loaded;
-      }
-
-      if (process.env.NODE_ENV !== 'production') {
-        log('Parent: Loading frame', {
-          url: url
-        });
-      }
-
-      _this4.frame.src = url;
-    });
+        _this4.frame.src = url;
+      })
+    };
   };
 
   return Postmate;
